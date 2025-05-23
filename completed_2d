@@ -1,0 +1,287 @@
+import pygame
+import pytmx
+import random
+
+# Constants
+SCREEN_WIDTH, SCREEN_HEIGHT = 1000, 1000
+MAP_FILE = "MAP.tmx"
+PLAYER_SPEED = 3
+ENEMY_SPEED = 2
+MAX_HEALTH = 100
+ENERGY_PILL_SIZE = 10  # Diameter of red circle
+PLAYER_SIZE = (40, 40)
+
+pygame.init()
+pygame.mixer.init()
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("Key and Door")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont("Arial", 40)
+
+def load_assets():
+    # Load TMX map
+    tmx_data = pytmx.load_pygame(MAP_FILE, pixelalpha=True)
+    map_width_px = tmx_data.width * tmx_data.tilewidth
+    map_height_px = tmx_data.height * tmx_data.tileheight
+    offset_x = (SCREEN_WIDTH - map_width_px) // 2
+    offset_y = (SCREEN_HEIGHT - map_height_px) // 2
+
+    # Load images
+    player_img = pygame.transform.scale(pygame.image.load("player1.png").convert_alpha(), PLAYER_SIZE)
+    enemy_img = pygame.transform.scale(pygame.image.load("enemie.png").convert_alpha(), PLAYER_SIZE)
+    key_img = pygame.transform.scale(pygame.image.load("key.png").convert_alpha(), PLAYER_SIZE)
+
+    # Load sounds
+    pygame.mixer.music.load("fight-for-the-future.mp3")
+    pygame.mixer.music.set_volume(0.5)
+    door_sound = pygame.mixer.Sound("door.mp3")
+    key_sound = pygame.mixer.Sound("key.wav")
+    lose_sound = pygame.mixer.Sound("lose.wav")
+
+    # Load and scale start background image to full screen
+    start_bg = pygame.image.load("background.jpg").convert()
+    start_bg = pygame.transform.scale(start_bg, (SCREEN_WIDTH, SCREEN_HEIGHT))
+
+    # Optional: load and scale in-game background image (uncomment and add your image if you want)
+    # game_bg = pygame.image.load("game_bg.png").convert()
+    # game_bg = pygame.transform.scale(game_bg, (SCREEN_WIDTH, SCREEN_HEIGHT))
+
+    return (tmx_data, offset_x, offset_y,
+            player_img, enemy_img, key_img,
+            door_sound, key_sound, lose_sound,
+            start_bg,
+            # game_bg,
+            map_width_px, map_height_px)
+
+def tile_coords_from_pixel(px, py, offset_x, offset_y, tmx_data):
+    return (px - offset_x) // tmx_data.tilewidth, (py - offset_y) // tmx_data.tileheight
+
+def can_move_to(px, py, blocked_set, offset_x, offset_y, tmx_data):
+    corners = [
+        (px, py),
+        (px + PLAYER_SIZE[0] - 1, py),
+        (px, py + PLAYER_SIZE[1] - 1),
+        (px + PLAYER_SIZE[0] - 1, py + PLAYER_SIZE[1] - 1)
+    ]
+    for cx, cy in corners:
+        tx, ty = tile_coords_from_pixel(cx, cy, offset_x, offset_y, tmx_data)
+        if (tx, ty) in blocked_set or not (0 <= tx < tmx_data.width and 0 <= ty < tmx_data.height):
+            return False
+    return True
+
+def draw_map(surface, tmx_data, offset_x, offset_y):
+    for layer in tmx_data.visible_layers:
+        if isinstance(layer, pytmx.TiledTileLayer):
+            for x, y, gid in layer:
+                tile = tmx_data.get_tile_image_by_gid(gid)
+                if tile:
+                    surface.blit(tile, (offset_x + x * tmx_data.tilewidth, offset_y + y * tmx_data.tileheight))
+
+def move_enemy_towards_player(enemy_rect, player_rect, enemy_blocked_tiles, offset_x, offset_y, tmx_data):
+    dx = player_rect.centerx - enemy_rect.centerx
+    dy = player_rect.centery - enemy_rect.centery
+    dist = max((dx**2 + dy**2) ** 0.5, 0.0001)
+    vx = ENEMY_SPEED * dx / dist
+    vy = ENEMY_SPEED * dy / dist
+    if can_move_to(enemy_rect.x + vx, enemy_rect.y, enemy_blocked_tiles, offset_x, offset_y, tmx_data):
+        enemy_rect.x += vx
+    if can_move_to(enemy_rect.x, enemy_rect.y + vy, enemy_blocked_tiles, offset_x, offset_y, tmx_data):
+        enemy_rect.y += vy
+
+def generate_energy_pill(tmx_data, blocked_tiles, offset_x, offset_y):
+    while True:
+        x = random.randint(0, tmx_data.width - 1)
+        y = random.randint(0, tmx_data.height - 1)
+        if (x, y) not in blocked_tiles:
+            px = offset_x + x * tmx_data.tilewidth + (tmx_data.tilewidth - ENERGY_PILL_SIZE) // 2
+            py = offset_y + y * tmx_data.tileheight + (tmx_data.tileheight - ENERGY_PILL_SIZE) // 2
+            return pygame.Rect(px, py, ENERGY_PILL_SIZE, ENERGY_PILL_SIZE)
+
+def start_screen(screen, start_bg, font):
+    while True:
+        screen.blit(start_bg, (0, 0))
+        title_text = font.render("Key and Door", True, (255, 255, 255))
+        prompt_text = font.render("Press Enter to Start", True, (255, 255, 255))
+        screen.blit(title_text, (SCREEN_WIDTH // 2 - title_text.get_width() // 2, SCREEN_HEIGHT // 3))
+        screen.blit(prompt_text, (SCREEN_WIDTH // 2 - prompt_text.get_width() // 2, SCREEN_HEIGHT // 2))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
+                return
+
+def game_over_menu(screen, font):
+    while True:
+        screen.fill((0, 0, 0))
+        text1 = font.render("Game Over! You Lost!", True, (255, 0, 0))
+        text2 = font.render("Press R to Restart or Q to Quit", True, (255, 255, 255))
+        screen.blit(text1, (SCREEN_WIDTH // 2 - text1.get_width() // 2, SCREEN_HEIGHT // 3))
+        screen.blit(text2, (SCREEN_WIDTH // 2 - text2.get_width() // 2, SCREEN_HEIGHT // 2))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    return True
+                elif event.key == pygame.K_q:
+                    pygame.quit()
+                    exit()
+
+def run_game():
+    # Load all assets
+    (tmx_data, offset_x, offset_y,
+     player_img, enemy_img, key_img,
+     door_sound, key_sound, lose_sound,
+     start_bg,
+     # game_bg,
+     map_width_px, map_height_px) = load_assets()
+
+    # Blocked tiles
+    blocked_tiles = set()
+    enemy_blocked_tiles = set()
+    for layer in tmx_data.visible_layers:
+        if isinstance(layer, pytmx.TiledTileLayer):
+            for x, y, gid in layer:
+                props = tmx_data.get_tile_properties_by_gid(gid)
+                if props:
+                    if props.get("blocked"):
+                        blocked_tiles.add((x, y))
+                    if props.get("enemy_blocked"):
+                        enemy_blocked_tiles.add((x, y))
+
+    # Extra enemy wall zones
+    for x in range(0, 5):
+        for y in range(0, 5):
+            enemy_blocked_tiles.add((x, y))
+    for x in range(tmx_data.width - 3, tmx_data.width):
+        for y in range(tmx_data.height - 3, tmx_data.height):
+            enemy_blocked_tiles.add((x, y))
+
+    player_rect = player_img.get_rect(topleft=(offset_x + 2 * tmx_data.tilewidth, offset_y + 2 * tmx_data.tileheight))
+    enemy_rect = enemy_img.get_rect(topleft=(offset_x + 5 * tmx_data.tilewidth, offset_y + 5 * tmx_data.tileheight))
+    key_rect = pygame.Rect(offset_x + 7 * tmx_data.tilewidth, offset_y + 7 * tmx_data.tileheight, *PLAYER_SIZE)
+
+    player_health = MAX_HEALTH
+    key_collected = False
+    door_unlocked = False
+    lost = False
+    energy_pills = []
+
+    door_tiles = {(x, y) for x in range(tmx_data.width - 2, tmx_data.width) for y in range(tmx_data.height - 2, tmx_data.height)}
+
+    # Start background music
+    pygame.mixer.music.play(-1)
+
+    while True:
+        screen.fill((0, 0, 0))
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_LEFT] and can_move_to(player_rect.x - PLAYER_SPEED, player_rect.y, blocked_tiles, offset_x, offset_y, tmx_data):
+            player_rect.x -= PLAYER_SPEED
+        if keys[pygame.K_RIGHT] and can_move_to(player_rect.x + PLAYER_SPEED, player_rect.y, blocked_tiles, offset_x, offset_y, tmx_data):
+            player_rect.x += PLAYER_SPEED
+        if keys[pygame.K_UP] and can_move_to(player_rect.x, player_rect.y - PLAYER_SPEED, blocked_tiles, offset_x, offset_y, tmx_data):
+            player_rect.y -= PLAYER_SPEED
+        if keys[pygame.K_DOWN] and can_move_to(player_rect.x, player_rect.y + PLAYER_SPEED, blocked_tiles, offset_x, offset_y, tmx_data):
+            player_rect.y += PLAYER_SPEED
+
+        move_enemy_towards_player(enemy_rect, player_rect, enemy_blocked_tiles, offset_x, offset_y, tmx_data)
+
+        # If enemy catches player before all energy pills collected -> lose
+        if player_rect.colliderect(enemy_rect):
+            if energy_pills:  # still energy pills left => player loses immediately
+                # Play lose sound, stop music and go to game over menu
+                lose_sound.play()
+                pygame.mixer.music.stop()
+                if game_over_menu(screen, font):
+                    # Restart game
+                    return True
+                else:
+                    pygame.quit()
+                    exit()
+            else:
+                # Only reduce health if no energy pills left
+                player_health -= 1
+                if player_health < 0:
+                    player_health = 0
+
+        # Spawn energy pills when health hits zero and no pills exist
+        if player_health == 0 and len(energy_pills) == 0 and not lost:
+            for _ in range(3):
+                energy_pills.append(generate_energy_pill(tmx_data, blocked_tiles, offset_x, offset_y))
+            lose_sound.play()
+            lost = True
+
+        # Pickup key
+        if not key_collected and player_rect.colliderect(key_rect):
+            key_collected = True
+            key_sound.play()
+
+        # Door unlock
+        if key_collected and tile_coords_from_pixel(player_rect.centerx, player_rect.centery, offset_x, offset_y, tmx_data) in door_tiles:
+            if not door_unlocked:
+                door_sound.play()
+            door_unlocked = True
+
+        # Collect energy pills
+        for pill in energy_pills[:]:
+            if player_rect.colliderect(pill):
+                player_health = min(player_health + 20, MAX_HEALTH)
+                energy_pills.remove(pill)
+                lost = False
+
+        # Draw everything
+        # Optional: If you want a background for the game uncomment and load game_bg in load_assets()
+        # screen.blit(game_bg, (0, 0))
+
+        draw_map(screen, tmx_data, offset_x, offset_y)
+        if not key_collected:
+            screen.blit(key_img, key_rect)
+        for pill in energy_pills:
+            pygame.draw.circle(screen, (255, 0, 0), pill.center, ENERGY_PILL_SIZE // 2)
+        screen.blit(player_img, player_rect)
+        screen.blit(enemy_img, enemy_rect)
+
+        # Draw health bar
+        hb_x, hb_y, hb_w, hb_h = offset_x + 10, offset_y + 10, 200, 20
+        pygame.draw.rect(screen, (100, 100, 100), (hb_x, hb_y, hb_w, hb_h))
+        pygame.draw.rect(screen, (0, 255, 0), (hb_x, hb_y, int(hb_w * player_health / MAX_HEALTH), hb_h))
+
+        # Victory
+        if door_unlocked:
+            text = font.render("Door Unlocked! You Win!", True, (255, 255, 255))
+            screen.blit(text, (offset_x + map_width_px // 2 - text.get_width() // 2, offset_y + map_height_px // 2 - text.get_height() // 2))
+            pygame.display.flip()
+            pygame.time.wait(3000)
+            return False  # exit game loop
+
+        pygame.display.flip()
+        clock.tick(60)
+
+def main():
+    # Load assets early to avoid delays
+    (tmx_data, offset_x, offset_y,
+     player_img, enemy_img, key_img,
+     door_sound, key_sound, lose_sound,
+     start_bg,
+     # game_bg,
+     map_width_px, map_height_px) = load_assets()
+
+    while True:
+        start_screen(screen, start_bg, font)
+        pygame.mixer.music.play(-1)
+        restart = run_game()
+        if not restart:
+            break  # exit after winning or quitting
+    pygame.quit()
+
+if __name__ == "__main__":
+    main()
